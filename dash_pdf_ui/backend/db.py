@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Optional
 from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import ServerSelectionTimeoutError
 import threading
+import os
 
 # Try to connect to MongoDB with a short timeout. If unavailable, fall back to
 # a simple in-memory store so the app can run without a Mongo daemon (useful
@@ -13,7 +14,10 @@ _USE_MOCK = False
 _mock_lock = threading.Lock()
 _mock_store: Dict[str, Dict[str, Any]] = {}
 
-def get_client(uri: str = "mongodb://localhost:27017", timeout_ms: int = 2000):
+def get_client(uri: str = None, timeout_ms: int = 2000):
+    # Use MONGO_URI environment variable if available, otherwise use local MongoDB
+    if uri is None:
+        uri = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
     return MongoClient(uri, serverSelectionTimeoutMS=timeout_ms)
 
 def clear_mock_store():

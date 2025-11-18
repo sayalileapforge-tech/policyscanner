@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>PolicyScanner Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <div class="logo">PS</div>
+        <h1 class="header-title">PolicyScanner Dashboard</h1>
+        <nav class="header-nav">
+          <button class="nav-btn" id="reloadFilesBtn" title="Reload previously saved reports"> Reload Files</button>
+        </nav>
+      </div>
+      <div class="header-actions">
+        <button class="export-btn" id="exportPdfBtn" title="Export report as PDF">Export PDF</button>
+      </div>
+      <div class="summary-chips">
+        <div class="summary-chip">
+          <div class="chip-label">Total Policies</div>
+          <div class="chip-value" id="statPolicies">0</div> 
+        </div>
+        <div class="summary-chip">
+          <div class="chip-label">Total Claims</div>
+          <div class="chip-value" id="statTotalClaims">0</div>
+        </div>
+        <div class="summary-chip">
+          <div class="chip-label">Claims Subtotal</div>
+          <div class="chip-value" id="statClaimsSubtotal">—</div>
+        </div>
+      </div>
+      </div>
+    </header>
+
+    <!-- Reload Files Modal -->
+    <div id="reloadModal" class="modal hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Reload Saved Reports</h2>
+          <button class="modal-close" id="modalCloseBtn">✕</button>
+        </div>
+        <div class="modal-body">
+          <div id="savedFilesList" class="saved-files-list">
+            <div class="muted">Loading saved files...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- File Upload Area -->
+    <div class="file-upload-area" id="fileUploadArea">
+      <div class="upload-icon">📄</div>
+      <div class="upload-text">Drag & Drop PDF File Here</div>
+      <div class="upload-description">or click to browse files</div>
+      <input type="file" id="fileInput" class="file-input" accept=".pdf"/>
+      <button class="upload-button">Choose File</button>
+    </div>
+
+    <!-- Driver Information Card -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Driver Information</h2>
+      </div>
+      
+      <div class="driver-info-grid">
+        <!-- Driver Name -->
+        <div class="driver-info-item full-width">
+          <div class="driver-info-label">Driver Name</div>
+          <div class="driver-info-value-wrapper">
+            <div id="driverName" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="driverName" title="Copy">📋</button>
+          </div>
+        </div>
+
+        <!-- Address -->
+        <div class="driver-info-item full-width">
+          <div class="driver-info-label">Address</div>
+          <div class="driver-info-value-wrapper" id="addressWrapper">
+            <div id="address" class="driver-info-value">—</div>
+          </div>
+        </div>
+
+        <!-- DLN -->
+        <div class="driver-info-item">
+          <div class="driver-info-label">DLN</div>
+          <div class="driver-info-value-wrapper">
+            <div id="dln" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="dln" title="Copy">📋</button>
+          </div>
+        </div>
+
+        <!-- Date of Birth -->
+        <div class="driver-info-item">
+          <div class="driver-info-label">Date of Birth</div>
+          <div class="driver-info-value-wrapper">
+            <div id="dob" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="dob" title="Copy">📋</button>
+          </div>
+        </div>
+
+        <!-- Gender -->
+        <div class="driver-info-item">
+          <div class="driver-info-label">Gender</div>
+          <div class="driver-info-value-wrapper">
+            <div id="gender" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="gender" title="Copy">📋</button>
+          </div>
+        </div>
+
+        <!-- Marital Status -->
+        <div class="driver-info-item">
+          <div class="driver-info-label">Marital Status</div>
+          <div class="driver-info-value-wrapper">
+            <div id="maritalStatus" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="maritalStatus" title="Copy">📋</button>
+          </div>
+        </div>
+
+        <!-- First Day of Insurance -->
+        <div class="driver-info-item">
+          <div class="driver-info-label">First Day of Insurance</div>
+          <div class="driver-info-value-wrapper">
+            <div id="firstDayInsurance" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="firstDayInsurance" title="Copy">📋</button>
+          </div>
+        </div>
+
+        <!-- Years of Continuous Insurance -->
+        <div class="driver-info-item">
+          <div class="driver-info-label">Years of Continuous Insurance</div>
+          <div class="driver-info-value-wrapper">
+            <div id="yearsContinuousInsurance" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="yearsContinuousInsurance" title="Copy">📋</button>
+          </div>
+        </div>
+
+        <!-- Claims (Last 6 Years) -->
+        <div class="driver-info-item">
+          <div class="driver-info-label">Claims (Last 6 Years)</div>
+          <div class="driver-info-value-wrapper">
+            <div id="claimsSixYears" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="claimsSixYears" title="Copy">📋</button>
+          </div>
+        </div>
+        
+        <!-- At-Fault Claims (Last 6 Years) -->
+        <div class="driver-info-item">
+          <div class="driver-info-label">At-Fault Claims (Last 6 Years)</div>
+          <div class="driver-info-value-wrapper">
+            <div id="atFaultClaimsSixYears" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="atFaultClaimsSixYears" title="Copy">📋</button>
+          </div>
+        </div>
+        
+        <!-- Current Policy Expiry Date -->
+        <div class="driver-info-item full-width">
+          <div class="driver-info-label">Current Policy Expiry Date</div>
+          <div class="driver-info-value-wrapper">
+            <div id="currentPolicyExpiryDate" class="driver-info-value">—</div>
+            <button class="copy-btn" data-copy="currentPolicyExpiryDate" title="Copy">📋</button>
+          </div>
+        </div>
+        
+        <!-- Days to Expiry -->
+        <div class="driver-info-item full-width">
+          <div class="driver-info-label">Days to expiry:</div>
+          <div class="driver-info-value-wrapper">
+            <div id="daysToExpiry" class="days-badge">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Policies Card -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Policies</h2>
+      </div>
+      <div class="policies-list" id="policiesList">
+        <div class="muted">No policies loaded.</div>
+      </div>
+    </div>
+    
+    <!-- Claims Card -->
+    <div class="card">
+      <div class="card-header">
+        <h2 class="card-title">Claims</h2>
+      </div>
+      <div class="claims-list" id="claimsList">
+        <div class="muted">No claims found.</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

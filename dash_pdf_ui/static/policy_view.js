@@ -55,6 +55,10 @@
 
   function parseMaybeDate(s){
     if (!s) return null;
+    // Try parsing MM/DD/YYYY format (new format)
+    const mmddyyyy = s.match(/\b(\d{2})\/(\d{2})\/(\d{4})\b/);
+    if (mmddyyyy) return new Date(`${mmddyyyy[3]}-${mmddyyyy[1]}-${mmddyyyy[2]}T00:00:00`);
+    // Try parsing YYYY-MM-DD format (old format, for backwards compatibility)
     const m = s.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
     if (m) return new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00`);
     const t = Date.parse(s); return isNaN(t)?null:new Date(t);

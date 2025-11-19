@@ -4,6 +4,36 @@ import re
 import hashlib
 import pdfplumber
 from typing import Dict, Any, List
+from datetime import datetime
+
+
+def format_date_to_mmddyyyy(date_str: str) -> str:
+    """Convert various date formats to MM/DD/YYYY format."""
+    if not date_str or date_str == "N/A" or date_str == "—":
+        return date_str
+    
+    # Remove timezone info if present (e.g., "2025-11-07 19-43-39-EST")
+    date_str = re.sub(r'\s*(?:EST|UTC|EDT|IST|GMT|CST|PST|MST|AST|NST).*$', '', date_str.strip())
+    
+    # Try parsing YYYY-MM-DD format (most common)
+    try:
+        if re.match(r'^\d{4}-\d{2}-\d{2}', date_str):
+            dt = datetime.strptime(date_str[:10], '%Y-%m-%d')
+            return dt.strftime('%m/%d/%Y')
+    except (ValueError, TypeError):
+        pass
+    
+    # Try parsing MM-DD-YYYY or MM/DD/YYYY (already correct or similar)
+    try:
+        if re.match(r'^\d{1,2}[-/]\d{1,2}[-/]\d{4}', date_str):
+            # Normalize to MM/DD/YYYY
+            dt = datetime.strptime(date_str[:10], '%m-%d-%Y') if '-' in date_str[:10] else datetime.strptime(date_str[:10], '%m/%d/%Y')
+            return dt.strftime('%m/%d/%Y')
+    except (ValueError, TypeError):
+        pass
+    
+    # Return original if conversion fails
+    return date_str
 
 
 def extract_full_text(pdf_path: Path) -> Dict[str, Any]:
@@ -29,11 +59,11 @@ def parse_header_block(text: str) -> Dict[str, Any]:
     if dln:
         data["dln"] = dln.group(1).strip()
         data["province"] = dln.group(2).strip()
-    data["date_of_birth"] = _re_get(r"Date of Birth:\s*([0-9\-]+)", text)
-    data["report_date"] = _re_get(r"Report Date:\s*([0-9:\- ]+(?:EST|UTC|EDT|IST))", text)
+    data["date_of_birth"] = format_date_to_mmddyyyy(_re_get(r"Date of Birth:\s*([0-9\-]+)", text) or "")
+    data["report_date"] = format_date_to_mmddyyyy(_re_get(r"Report Date:\s*([0-9:\- ]+(?:EST|UTC|EDT|IST))", text) or "")
     data["requestor"] = _re_get(r"Requestor:\s*(.+)", text)
     data["company"] = _re_get(r"Company:\s*(.+)", text)
-    data["last_data_update"] = _re_get(r"Last Data Update:\s*([0-9\-]+)", text)
+    data["last_data_update"] = format_date_to_mmddyyyy(_re_get(r"Last Data Update:\s*([0-9\-]+)", text) or "")
     data["years_of_data"] = _re_get(r"Number of Years of Data:\s*([0-9]+)", text)
 
     addr = _re_get(r"Address:\s*(.+?)\s+Number of Claims in Last 6 Years:", text, flags=re.DOTALL)
@@ -84,9 +114,9 @@ _STATUS_PAT = r"(Active|Inactive|Lapsed|Expired|Non-?Renewed(?:.*)?|Cancelled(?:
 def parse_policy_block(block: str) -> Dict[str, Any]:
     header: Dict[str, Any] = {
         "policy_number": _re_get(r"Policy #:?\s*([A-Z0-9]+)", block),
-        "effective_date": _re_get(r"Effective Date:\s*([0-9\-]+)", block),
-        "expiry_date": _re_get(r"Expiry Date:\s*([0-9\-]+)", block),
-        "cancellation_date": _re_get(r"Cancellation Date:\s*([A-Za-z0-9\-\\/]+|N/A)", block),
+        "effective_date": format_date_to_mmddyyyy(_re_get(r"Effective Date:\s*([0-9\-]+)", block) or ""),
+        "expiry_date": format_date_to_mmddyyyy(_re_get(r"Expiry Date:\s*([0-9\-]+)", block) or ""),
+        "cancellation_date": format_date_to_mmddyyyy(_re_get(r"Cancellation Date:\s*([A-Za-z0-9\-\\/]+|N/A)", block) or ""),
         "policyholder_name": None,
         "policyholder_address": _re_get(r"Policyholder Address:\s*(.+)", block),
         "num_reported_operators": _re_get(r"Number of Reported Operators:\s*([0-9]+)", block),
@@ -262,7 +292,7 @@ def parse_previous_inquiries(text: str) -> List[Dict[str, Any]]:
     for line in lines:
         parts = re.split(r"\s{2,}", line, maxsplit=1)
         if len(parts) == 2 and re.match(r"\d{4}-\d{2}-\d{2}", parts[0]):
-            out.append({"date": parts[0], "who": parts[1]})
+            out.append({"date": format_date_to_mmddyyyy(parts[0]), "who": parts[1]})
     return out
 
 
@@ -285,10 +315,13 @@ def parse_claims(text: str) -> List[Dict[str, Any]]:
     vin_re = re.compile(r"\b([A-HJ-NPR-Z0-9]{11,17})\b", flags=re.IGNORECASE)
 
     for cb in claims:
-        # insurer: from line like 'Date of Loss 2023-07-12 Aviva Canada At-Fault'
+        # date_of_loss and insurer: from line like 'Date of Loss 2023-07-12 Aviva Canada At-Fault'
+        date_of_loss_raw = _re_get(r"Date of Loss\s+([0-9]{4}-[0-9]{2}-[0-9]{2})", cb)
+        date_of_loss = format_date_to_mmddyyyy(date_of_loss_raw or "")
         insurer = _re_get(r"Date of Loss\s+[0-9]{4}-[0-9]{2}-[0-9]{2}\s+(.+?)\s+At-?Fault", cb)
         # date_reported: 'Date Reported: YYYY-MM-DD'
-        date_reported = _re_get(r"Date Reported\s*[:\s]*([0-9]{4}-[0-9]{2}-[0-9]{2})", cb)
+        date_reported_raw = _re_get(r"Date Reported\s*[:\s]*([0-9]{4}-[0-9]{2}-[0-9]{2})", cb)
+        date_reported = format_date_to_mmddyyyy(date_reported_raw or "")
 
         # vehicle: from 'Vehicle: 2008 HONDA ACCORD EX 4DR - VIN' (stop before VIN)
         vehicle = None
@@ -374,6 +407,7 @@ def parse_claims(text: str) -> List[Dict[str, Any]]:
             tp_license = _re_get(r"License\s*:\s*(.+)", tp_block)
 
         out.append({
+            "date_of_loss": date_of_loss,
             "insurer": insurer,
             "vehicle": vehicle,
             "vin": vin,

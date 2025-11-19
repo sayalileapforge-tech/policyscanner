@@ -473,10 +473,22 @@ function escapeHtml(s) {
 
 function parseMaybeDate(s) {
   if (!s) return null;
+  // Try parsing MM/DD/YYYY format (new format)
+  const mmddyyyy = s.match(/\b(\d{2})\/(\d{2})\/(\d{4})\b/);
+  if (mmddyyyy) return new Date(`${mmddyyyy[3]}-${mmddyyyy[1]}-${mmddyyyy[2]}T00:00:00`);
+  // Try parsing YYYY-MM-DD format (old format, for backwards compatibility)
   const m = s.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
   if (m) return new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00`);
   const t = Date.parse(s);
   return isNaN(t) ? null : new Date(t);
+}
+
+function formatDateToMMDDYYYY(dateObj) {
+  if (!dateObj) return '—';
+  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const day = String(dateObj.getDate()).padStart(2, '0');
+  const year = dateObj.getFullYear();
+  return `${month}/${day}/${year}`;
 }
 
 function monthsBetween(d1, d2) {
@@ -490,15 +502,12 @@ function renderReport(rep) {
   const h = rep.header || {};
   setText('driverName', h.driver_name);
   setAddressWithCopyButtons(h.address);
-  setText('dln', [h.dln, h.province].filter(Boolean).join(' '));
+  setText('dln', h.dln);
   setText('dob', h.date_of_birth);
   setText('gender', h.gender);
   setText('maritalStatus', h.marital_status);
-  setText('yearsContinuousInsurance', h.years_cont_insurance);
-  setText('claimsSixYears', h.num_claims_6y);
-  setText('atFaultClaimsSixYears', h.num_atfault_6y);
   
-  // Calculate first day of insurance
+  // Calculate first day of insurance (today minus years)
   let firstDay = '—';
   if (h.years_cont_insurance && h.report_date) {
     const reportDate = parseMaybeDate(h.report_date);
@@ -506,10 +515,20 @@ function renderReport(rep) {
       const yearsAgo = parseInt(h.years_cont_insurance);
       const firstDate = new Date(reportDate);
       firstDate.setFullYear(firstDate.getFullYear() - yearsAgo);
-      firstDay = firstDate.toISOString().split('T')[0];
+      // Format as MM/DD/YYYY
+      const month = String(firstDate.getMonth() + 1).padStart(2, '0');
+      const day = String(firstDate.getDate()).padStart(2, '0');
+      const year = firstDate.getFullYear();
+      firstDay = `${month}/${day}/${year}`;
     }
   }
+  
+  // Years continuous insurance = today's date minus years (same as firstDay)
+  setText('yearsContinuousInsurance', firstDay);
+  // First day of insurance = same date
   setText('firstDayInsurance', firstDay);
+  setText('claimsSixYears', h.num_claims_6y);
+  setText('atFaultClaimsSixYears', h.num_atfault_6y);
   
   // Get current policy expiry date (from latest active policy)
   const policies = rep.policies || [];
@@ -563,12 +582,12 @@ function renderReport(rep) {
   
   setText('statClaimsSubtotal', totalSubtotal > 0 ? '$' + totalSubtotal.toFixed(2) : '—');
   
-  renderPolicies(rep.policies || []);
+  renderPolicies(rep.policies || [], h.dln);
   renderClaims(claims);
 }
 
 /* ========== Policies Rendering ========== */
-function renderPolicies(policies) {
+function renderPolicies(policies, driverDLN) {
   const container = document.getElementById('policiesList');
   container.innerHTML = '';
   
@@ -657,32 +676,75 @@ function renderPolicies(policies) {
     const displayOp = matchedOp?.operator_name || (ops[0]?.operator_name || '—');
     const displayRelationship = matchedOp?.relationship || '—';
     const displayYearOfBirth = matchedOp?.year_of_birth || '—';
-    // Always use operator end_term if any operator has it. Never fall back to policy expiry_date.
-    let displayEndTerm = '—';
-    const opWithEnd = ops.find(o => o && o.end_term);
-    if (opWithEnd) {
-      displayEndTerm = opWithEnd.end_term;
-    }
-
-    let displayStartTerm = '—';
-    const opWithStart = ops.find(o => o && o.start_term);
-    if (opWithStart) {
-      displayStartTerm = opWithStart.start_term;
+    
+    // Find operator with matching DLN
+    let dlnMatchedOp = null;
+    if (driverDLN) {
+      dlnMatchedOp = ops.find(o => o && o.dln === driverDLN);
     }
     
-    // Compute coverage gap relative to next policy (if any)
-    let gapText = 'None';
-    if (reversedIdx < reversed.length - 1) {
-      const nextPolicy = reversed[reversedIdx + 1];
-      const nextH = nextPolicy.header || {};
-      const curEnd = parseMaybeDate(h.expiry_date || h.cancellation_date);
-      const nextStart = parseMaybeDate(nextH.effective_date);
-      if (curEnd && nextStart) {
-        const m = monthsBetween(curEnd, nextStart);
-        if (m > 0) gapText = `Coverage Gap — ${m} month${m === 1 ? '' : 's'}`;
-        else if (m === 0) gapText = 'No Coverage Gap';
-        else gapText = `Overlap — ${Math.abs(m)} month${Math.abs(m) === 1 ? '' : 's'}`;
+    // Get End of Latest Term and Start of Earliest Term from DLN-matched operator only
+    let displayEndTerm = '—';
+    let displayStartTerm = '—';
+    let startDateForOverlap = null;
+    
+    if (dlnMatchedOp) {
+      // End of Latest Term from matched operator
+      if (dlnMatchedOp.end_term) {
+        const endTermParsed = parseMaybeDate(dlnMatchedOp.end_term);
+        displayEndTerm = endTermParsed ? formatDateToMMDDYYYY(endTermParsed) : dlnMatchedOp.end_term;
       }
+      
+      // Start of Earliest Term from matched operator
+      if (dlnMatchedOp.start_term) {
+        const startTermParsed = parseMaybeDate(dlnMatchedOp.start_term);
+        displayStartTerm = startTermParsed ? formatDateToMMDDYYYY(startTermParsed) : dlnMatchedOp.start_term;
+        startDateForOverlap = startTermParsed;
+      }
+    }
+    
+    // Calculate Overlap Duration: current policy end - current policy start
+    let overlapDurationText = '—';
+    
+    if (dlnMatchedOp && dlnMatchedOp.end_term && dlnMatchedOp.start_term) {
+      const endDate = parseMaybeDate(dlnMatchedOp.end_term);
+      const startDate = parseMaybeDate(dlnMatchedOp.start_term);
+      
+      if (endDate && startDate) {
+        const daysDiff = Math.floor((endDate - startDate) / (1000 * 60 * 60 * 24));
+        overlapDurationText = `${daysDiff} days`;
+      }
+    }
+    
+    // Calculate GAP: current policy start - previous policy end
+    let gapText = 'None';
+    
+    if (reversedIdx < reversed.length - 1) {
+      // Not the first policy in reversed order (not the last chronologically)
+      const previousPolicy = reversed[reversedIdx + 1];
+      const previousOps = previousPolicy.operators || [];
+      let previousDlnMatchedOp = null;
+      if (driverDLN) {
+        previousDlnMatchedOp = previousOps.find(o => o && o.dln === driverDLN);
+      }
+      
+      if (previousDlnMatchedOp && previousDlnMatchedOp.end_term && dlnMatchedOp && dlnMatchedOp.start_term) {
+        const previousEndDate = parseMaybeDate(previousDlnMatchedOp.end_term);
+        const currentStartDate = parseMaybeDate(dlnMatchedOp.start_term);
+        
+        if (previousEndDate && currentStartDate) {
+          const gapDays = Math.floor((currentStartDate - previousEndDate) / (1000 * 60 * 60 * 24));
+          gapText = `${gapDays} days`;
+        }
+      }
+    }
+    
+    // Generate descriptive gap label showing the calculation
+    let gapLabel = 'Gap';
+    if (reversedIdx < reversed.length - 1) {
+      const currentPolicyNum = policyNum;
+      const previousPolicyNum = currentPolicyNum - 1;
+      gapLabel = `Gap (Policy ${currentPolicyNum} start − Policy ${previousPolicyNum} end)`;
     }
 
     const policyFields = [
@@ -690,7 +752,8 @@ function renderPolicies(policies) {
       ['Year of Birth', displayYearOfBirth],
       ['End of Latest Term', displayEndTerm],
       ['Start of Earliest Term', displayStartTerm],
-      ['Gap', gapText]
+      ['Overlap Duration', overlapDurationText],
+      [gapLabel, gapText]
     ];
     
     policyFields.forEach(([label, val]) => {

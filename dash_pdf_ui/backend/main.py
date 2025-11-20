@@ -78,7 +78,23 @@ async def parse_pdf(file: UploadFile = File(...)):
         tmp_path = Path(tmp.name)
 
     report = parse_report(tmp_path)
+    print("\n[DEBUG] REPORT STRUCTURE FROM PARSER:")
+    if "policies" in report and len(report["policies"]) > 0:
+        for idx, policy in enumerate(report["policies"]):
+            print(f"[DEBUG] Policy {idx}:")
+            print(f"  - Has 'start_of_earliest_term': {'start_of_earliest_term' in policy}")
+            if 'start_of_earliest_term' in policy:
+                print(f"  - start_of_earliest_term value: '{policy['start_of_earliest_term']}'")
+            if 'header' in policy:
+                print(f"  - effective_date: '{policy['header'].get('effective_date', 'N/A')}'")
     upserted = upsert_report(report)
+    print("\n[DEBUG] UPSERTED REPORT:")
+    if "policies" in upserted and len(upserted["policies"]) > 0:
+        for idx, policy in enumerate(upserted["policies"]):
+            print(f"[DEBUG] Policy {idx} after upsert:")
+            print(f"  - Has 'start_of_earliest_term': {'start_of_earliest_term' in policy}")
+            if 'start_of_earliest_term' in policy:
+                print(f"  - start_of_earliest_term value: '{policy['start_of_earliest_term']}'")
     tmp_path.unlink(missing_ok=True)
     return {"ok": True, "report": upserted}
 

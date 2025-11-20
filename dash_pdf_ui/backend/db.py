@@ -15,9 +15,9 @@ _mock_lock = threading.Lock()
 _mock_store: Dict[str, Dict[str, Any]] = {}
 
 def get_client(uri: str = None, timeout_ms: int = 2000):
-    # Use MONGO_URI environment variable if available, otherwise use local MongoDB
+    # Use MONGO_URI environment variable if available, otherwise use MongoDB Atlas
     if uri is None:
-        uri = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
+        uri = os.environ.get("MONGO_URI", "mongodb+srv://policydbuser:dbuser1234@policy-cluster.csl5psp.mongodb.net/?appName=policy-cluster")
     return MongoClient(uri, serverSelectionTimeoutMS=timeout_ms)
 
 def clear_mock_store():
@@ -46,14 +46,22 @@ def upsert_report(doc: Dict[str, Any]) -> Dict[str, Any]:
         # in-memory fallback
         with _mock_lock:
             _mock_store[doc["_id"]] = doc.copy()
-            return _mock_store[doc["_id"]]
+            result = _mock_store[doc["_id"]]
+            print(f"[DB DEBUG] Upserted to mock store. Policies count: {len(result.get('policies', []))}")
+            if result.get('policies'):
+                print(f"[DB DEBUG] First policy has 'start_of_earliest_term': {'start_of_earliest_term' in result['policies'][0]}")
+            return result
 
-    return col.find_one_and_update(
+    result = col.find_one_and_update(
         {"_id": doc["_id"]},
         {"$set": doc},
         upsert=True,
         return_document=ReturnDocument.AFTER,
     )
+    print(f"[DB DEBUG] Upserted to MongoDB. Policies count: {len(result.get('policies', []))}")
+    if result.get('policies'):
+        print(f"[DB DEBUG] First policy has 'start_of_earliest_term': {'start_of_earliest_term' in result['policies'][0]}")
+    return result
 
 def list_reports() -> List[Dict[str, Any]]:
     col = _get_collection()

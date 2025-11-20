@@ -36,6 +36,48 @@ def format_date_to_mmddyyyy(date_str: str) -> str:
     return date_str
 
 
+def extract_policy_date(block: str, date_type: str = "effective") -> str:
+    """
+    Extract policy effective or expiry date while ignoring print/generated dates.
+    
+    Args:
+        block: Policy block text
+        date_type: "effective" for start date, "expiry" for end date
+    
+    Returns:
+        Formatted date string in MM/DD/YYYY format, or empty string if not found
+    """
+    # Keywords that indicate the date we're looking for
+    if date_type == "effective":
+        target_keywords = [r"Start(?:\s+of\s+the\s+Earliest)?", r"Effective", r"Issue", r"Beginning", r"Policy\s+Start", r"Period\s+From"]
+    else:  # expiry
+        target_keywords = [r"End(?:\s+of\s+the\s+Latest)?", r"Expiry", r"Expiration", r"Period\s+To"]
+    
+    # Keywords to ignore (print/generated dates)
+    ignore_keywords = [r"Print", r"Generated", r"Revised", r"Billed", r"Printed", r"Report\s+Date"]
+    
+    # Split into lines and process from top (header) to bottom
+    lines = block.split('\n')
+    
+    for line in lines[:30]:  # Only check first 30 lines (near header)
+        line_lower = line.lower()
+        
+        # Skip lines with ignore keywords
+        if any(re.search(keyword, line_lower, re.IGNORECASE) for keyword in ignore_keywords):
+            continue
+        
+        # Check if line contains target keyword
+        has_target = any(re.search(keyword, line_lower, re.IGNORECASE) for keyword in target_keywords)
+        
+        if has_target:
+            # Extract date from this line (YYYY-MM-DD or MM/DD/YYYY or MM-DD-YYYY)
+            date_match = re.search(r'(\d{4}-\d{2}-\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{4})', line)
+            if date_match:
+                return format_date_to_mmddyyyy(date_match.group(1))
+    
+    return ""
+
+
 def extract_full_text(pdf_path: Path) -> Dict[str, Any]:
     text_pages: List[str] = []
     with pdfplumber.open(pdf_path) as pdf:
@@ -114,8 +156,8 @@ _STATUS_PAT = r"(Active|Inactive|Lapsed|Expired|Non-?Renewed(?:.*)?|Cancelled(?:
 def parse_policy_block(block: str) -> Dict[str, Any]:
     header: Dict[str, Any] = {
         "policy_number": _re_get(r"Policy #:?\s*([A-Z0-9]+)", block),
-        "effective_date": format_date_to_mmddyyyy(_re_get(r"Effective Date:\s*([0-9\-]+)", block) or ""),
-        "expiry_date": format_date_to_mmddyyyy(_re_get(r"Expiry Date:\s*([0-9\-]+)", block) or ""),
+        "effective_date": extract_policy_date(block, "effective"),
+        "expiry_date": extract_policy_date(block, "expiry"),
         "cancellation_date": format_date_to_mmddyyyy(_re_get(r"Cancellation Date:\s*([A-Za-z0-9\-\\/]+|N/A)", block) or ""),
         "policyholder_name": None,
         "policyholder_address": _re_get(r"Policyholder Address:\s*(.+)", block),
@@ -388,6 +430,21 @@ def parse_claims(text: str) -> List[Dict[str, Any]]:
             te_f = 0.0
         subtotal = f"{(tl_f + te_f):.2f}"
 
+        # Extract kind_of_loss (KOL) entries - pattern like "KOL26 - Glass/windshield damage not caused by windstorm or hail: $1,057.00 (Loss); $0.00 (Expense)"
+        kind_of_loss_list = []
+        kol_pattern = r"(KOL\d+)\s*[-–]\s*([^:]+):\s*\$([0-9,]+(?:\.[0-9]{2})?)\s*\(Loss\);\s*\$([0-9,]+(?:\.[0-9]{2})?)\s*\(Expense\)"
+        for kol_match in re.finditer(kol_pattern, cb, flags=re.IGNORECASE):
+            kol_code = kol_match.group(1).strip()
+            kol_description = kol_match.group(2).strip()
+            kol_loss = kol_match.group(3).replace(',', '').replace('$', '').strip()
+            kol_expense = kol_match.group(4).replace(',', '').replace('$', '').strip()
+            kind_of_loss_list.append({
+                "code": kol_code,
+                "description": kol_description,
+                "loss": kol_loss,
+                "expense": kol_expense
+            })
+
         # Extract first and third party driver info from the claim block
         fp_name = None
         fp_license = None
@@ -418,6 +475,7 @@ def parse_claims(text: str) -> List[Dict[str, Any]]:
             "total_loss": total_loss,
             "total_expense": total_expense,
             "subtotal": subtotal,
+            "kind_of_loss": kind_of_loss_list,
             "first_party_driver": {"name": fp_name, "license": fp_license},
             "third_party_driver": {"name": tp_name, "license": tp_license},
         })
@@ -433,15 +491,100 @@ def parse_report(pdf_path: Path) -> Dict[str, Any]:
     inquiries = parse_previous_inquiries(full_text)
     claims = parse_claims(full_text)
 
-    # Filter operators to only include those whose DLN matches the driver's DLN
     header_dln = header.get("dln")
+    
+    # STEP 1: Build a mapping of each DLN to its operators in CHRONOLOGICAL order
+    # Only include operators where operator.dln == header_dln (all must be same DLN)
+    dln_policies: Dict[str, List[tuple]] = {}  # Maps DLN -> [(policy_idx, operator)]
+    
+    for policy_idx, policy in enumerate(policies):
+        if "operators" not in policy or len(policy["operators"]) == 0:
+            continue
+        
+        for operator in policy["operators"]:
+            op_dln = operator.get("dln")
+            if not op_dln:
+                continue
+            
+            # CRITICAL: Only process operators where DLN matches header_dln
+            if header_dln and op_dln != header_dln:
+                print(f"[DEBUG] IGNORING operator with DLN {op_dln} (header_dln={header_dln})")
+                continue
+            
+            if op_dln not in dln_policies:
+                dln_policies[op_dln] = []
+            
+            # Store (policy_idx, operator) in CHRONOLOGICAL order
+            dln_policies[op_dln].append((policy_idx, operator))
+    
+    # STEP 2 & 3: Apply shifting ONLY within each DLN group
+    shifted_values: Dict[int, str] = {}  # Maps policy_idx -> shifted start_term value
+    
+    for op_dln, policy_list in dln_policies.items():
+        print(f"[DEBUG] Processing DLN {op_dln} with {len(policy_list)} same-DLN policies")
+        
+        if len(policy_list) < 2:
+            # Only 1 policy in this DLN group, no shift needed
+            policy_idx, operator = policy_list[0]
+            original_value = operator.get("start_term", "")
+            shifted_values[policy_idx] = original_value
+            print(f"[DEBUG]   Only 1 policy for DLN {op_dln}, no shift: Policy {policy_idx} = {original_value}")
+            continue
+        
+        # Capture all ORIGINAL start_term values in chronological order
+        original_starts = {}
+        for idx in range(len(policy_list)):
+            policy_idx, operator = policy_list[idx]
+            original_starts[idx] = operator.get("start_term", "")
+            print(f"[DEBUG]   ORIGINAL[{idx}] Policy {policy_idx}: start_term={original_starts[idx]}")
+        
+        # SHIFT: shifted[i] = original[i-1] for i > 0; shifted[0] = original[0]
+        # First, apply shifts to all policies BEFORE updating operator objects
+        shifted_map = {}
+        
+        # Policy[0] keeps its original value
+        policy_idx_0, _ = policy_list[0]
+        shifted_map[policy_idx_0] = original_starts[0]
+        shifted_values[policy_idx_0] = original_starts[0]
+        print(f"[DEBUG]   SHIFTED[0] Policy {policy_idx_0}: <- {original_starts[0]} (unchanged, first in DLN group)")
+        
+        # Apply shift to remaining policies: shifted[i] = original[i-1]
+        for idx in range(1, len(policy_list)):
+            policy_idx, operator = policy_list[idx]
+            new_val = original_starts[idx - 1]
+            shifted_map[policy_idx] = new_val
+            shifted_values[policy_idx] = new_val
+            print(f"[DEBUG]   SHIFTED[{idx}] Policy {policy_idx}: <- {new_val}")
+        
+        # Now update all operator objects with their shifted values
+        for idx in range(len(policy_list)):
+            policy_idx, operator = policy_list[idx]
+            if policy_idx in shifted_map:
+                operator["start_term"] = shifted_map[policy_idx]
+    
+    # STEP 4: Filter operators to only include those matching header_dln
+    # This must happen AFTER shifting to ensure we don't lose the data
     if header_dln:
         for policy in policies:
             if "operators" in policy:
+                original_op_count = len(policy["operators"])
                 policy["operators"] = [
                     op for op in policy["operators"]
                     if op.get("dln") == header_dln
                 ]
+                filtered_count = len(policy["operators"])
+                if filtered_count < original_op_count:
+                    print(f"[DEBUG] Policy: filtered operators {original_op_count} -> {filtered_count}")
+    
+    # STEP 5: Assign formatted shifted values to policies
+    # Initialize start_of_earliest_term for ALL policies (even those with no operators)
+    print(f"\n[DEBUG] Assigning shifted start_of_earliest_term to ALL policies...")
+    for policy_idx, policy in enumerate(policies):
+        # Use shifted value if available, otherwise empty string
+        shifted_start_term = shifted_values.get(policy_idx, "")
+        formatted = format_date_to_mmddyyyy(shifted_start_term) if shifted_start_term else ""
+        policies[policy_idx]["start_of_earliest_term"] = formatted
+        print(f"[DEBUG]   Policy {policy_idx}: start_of_earliest_term = '{formatted}' (from shift: '{shifted_start_term}')")
 
     sig_str = f"{pdf_path.name}|{header.get('driver_name')}|{header.get('report_date')}|{len(policies)}"
     doc_id = hashlib.sha1(sig_str.encode("utf-8")).hexdigest()

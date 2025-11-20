@@ -507,36 +507,24 @@ function renderReport(rep) {
   setText('gender', h.gender);
   setText('maritalStatus', h.marital_status);
   
-  // Calculate first day of insurance (today minus years)
-  let firstDay = '—';
-  if (h.years_cont_insurance && h.report_date) {
-    const reportDate = parseMaybeDate(h.report_date);
-    if (reportDate) {
-      const yearsAgo = parseInt(h.years_cont_insurance);
-      const firstDate = new Date(reportDate);
-      firstDate.setFullYear(firstDate.getFullYear() - yearsAgo);
-      // Format as MM/DD/YYYY
-      const month = String(firstDate.getMonth() + 1).padStart(2, '0');
-      const day = String(firstDate.getDate()).padStart(2, '0');
-      const year = firstDate.getFullYear();
-      firstDay = `${month}/${day}/${year}`;
-    }
-  }
-  
-  // Years continuous insurance = today's date minus years (same as firstDay)
-  setText('yearsContinuousInsurance', firstDay);
-  
-  // Current Insurance = first policy's start_of_earliest_term date
+  // Years continuous insurance = Last Policy start of earliest term
+  // Current Insurance = First Policy (Policy 0) start of earliest term
   const policies = rep.policies || [];
   console.log('[DEBUG] All policies:', JSON.stringify(policies, null, 2));
+  let yearsContinuousInsuranceDate = '—';
   let currentInsuranceDate = '—';
+  
   if (policies.length > 0) {
-    const firstPolicy = policies[0];
-    console.log('[DEBUG] First policy:', firstPolicy);
-    console.log('[DEBUG] First policy keys:', Object.keys(firstPolicy));
-    console.log('[DEBUG] start_of_earliest_term:', firstPolicy.start_of_earliest_term);
+    // Last Policy = policies[policies.length - 1]
+    const lastPolicy = policies[policies.length - 1];
+    console.log('[DEBUG] Last Policy:', lastPolicy);
+    console.log('[DEBUG] Last Policy start_of_earliest_term:', lastPolicy.start_of_earliest_term);
+    yearsContinuousInsuranceDate = lastPolicy.start_of_earliest_term || '—';
     
-    // Use start_of_earliest_term if available, otherwise fall back to policy effective_date
+    // Current Insurance = First Policy (policies[0])
+    const firstPolicy = policies[0];
+    console.log('[DEBUG] First Policy:', firstPolicy);
+    console.log('[DEBUG] First Policy start_of_earliest_term:', firstPolicy.start_of_earliest_term);
     let insuranceDate = firstPolicy.start_of_earliest_term;
     if (!insuranceDate || insuranceDate === '—' || insuranceDate === '') {
       // Fallback to policy header effective_date
@@ -546,7 +534,10 @@ function renderReport(rep) {
     }
     currentInsuranceDate = insuranceDate || '—';
   }
-  console.log('[DEBUG] currentInsuranceDate:', currentInsuranceDate);
+  
+  console.log('[DEBUG] yearsContinuousInsuranceDate (last policy):', yearsContinuousInsuranceDate);
+  console.log('[DEBUG] currentInsuranceDate (first policy):', currentInsuranceDate);
+  setText('yearsContinuousInsurance', yearsContinuousInsuranceDate);
   setText('currentInsurance', currentInsuranceDate);
   setText('claimsSixYears', h.num_claims_6y);
   setText('atFaultClaimsSixYears', h.num_atfault_6y);
@@ -750,60 +741,45 @@ function renderPolicies(policies, driverDLN) {
       }
     }
     
-    // Calculate GAP
+    // Calculate GAP using the DISPLAYED dates (displayStartTerm and displayEndTerm)
     let gapText = '—';
     let gapLabel = 'Gap';
     
     if (reversedIdx < reversed.length - 1) {
-      // Not the last policy: gap between previous start and current end
-      const previousPolicy = reversed[reversedIdx + 1];
-      const previousOps = previousPolicy.operators || [];
+      // Not the last policy: gap between current start (displayStartTerm) and current end (displayEndTerm)
+      // displayStartTerm shows previous policy's start, displayEndTerm shows current policy's end
+      let currentStartDate = null;
+      let currentEndDate = null;
       
-      // Get previous policy start date
-      let previousStartDate = null;
-      if (previousPolicy.start_of_earliest_term) {
-        previousStartDate = parseMaybeDate(previousPolicy.start_of_earliest_term);
-      } else {
-        let dlnMatchedOp = previousOps.find(o => o && o.dln === driverDLN);
-        if (dlnMatchedOp && dlnMatchedOp.start_term) {
-          previousStartDate = parseMaybeDate(dlnMatchedOp.start_term);
-        }
+      // Parse displayStartTerm (which is the Start of Earliest Term being displayed)
+      if (displayStartTerm && displayStartTerm !== '—') {
+        currentStartDate = parseMaybeDate(displayStartTerm);
       }
       
-      // Get current policy end date
-      let currentEndDate = null;
-      if (driverDLN) {
-        const currentDlnMatchedOp = ops.find(o => o && o.dln === driverDLN);
-        if (currentDlnMatchedOp && currentDlnMatchedOp.end_term) {
-          currentEndDate = parseMaybeDate(currentDlnMatchedOp.end_term);
-        }
+      // Parse displayEndTerm (which is the End of Latest Term being displayed)
+      if (displayEndTerm && displayEndTerm !== '—') {
+        currentEndDate = parseMaybeDate(displayEndTerm);
       }
       
       // Calculate gap
-      if (previousStartDate && currentEndDate) {
-        const gapDays = Math.floor((previousStartDate - currentEndDate) / (1000 * 60 * 60 * 24));
+      if (currentStartDate && currentEndDate) {
+        const gapDays = Math.floor((currentStartDate - currentEndDate) / (1000 * 60 * 60 * 24));
         gapText = `${gapDays} days`;
         gapLabel = `Gap (Policy ${policyNum - 1} start − Policy ${policyNum} end)`;
       }
     } else {
-      // Last policy (Policy 1): gap from its own start to end
+      // Last policy (Policy 1): gap from its own start to end using displayed dates
       let startDate = null;
       let endDate = null;
       
-      if (policy.start_of_earliest_term) {
-        startDate = parseMaybeDate(policy.start_of_earliest_term);
-      } else {
-        let dlnMatchedOp = ops.find(o => o && o.dln === driverDLN);
-        if (dlnMatchedOp && dlnMatchedOp.start_term) {
-          startDate = parseMaybeDate(dlnMatchedOp.start_term);
-        }
+      // Parse displayStartTerm
+      if (displayStartTerm && displayStartTerm !== '—') {
+        startDate = parseMaybeDate(displayStartTerm);
       }
       
-      if (driverDLN) {
-        let dlnMatchedOp = ops.find(o => o && o.dln === driverDLN);
-        if (dlnMatchedOp && dlnMatchedOp.end_term) {
-          endDate = parseMaybeDate(dlnMatchedOp.end_term);
-        }
+      // Parse displayEndTerm
+      if (displayEndTerm && displayEndTerm !== '—') {
+        endDate = parseMaybeDate(displayEndTerm);
       }
       
       if (startDate && endDate) {
